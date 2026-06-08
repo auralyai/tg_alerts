@@ -7,6 +7,8 @@ from typing import Any
 from flask import Flask, abort, jsonify, request
 from werkzeug.exceptions import HTTPException
 
+from bot import NotificationBot, event_category
+
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -51,6 +53,12 @@ def _read_secret(name: str) -> str | None:
 
 
 ALLOWED_IPS = _parse_allowed_ips(_read_secret("ALLOWED_IPS"))
+
+_notification_bot = NotificationBot(
+    token=_read_secret("TELEGRAM_BOT_TOKEN") or "",
+    bindings_file=os.getenv("BINDINGS_FILE", "bindings.json"),
+)
+_notification_bot.start()
 
 
 def _client_ip() -> str:
@@ -127,6 +135,14 @@ def create_app() -> Flask:
             payload["event"],
             payload["success"],
             json.dumps(payload, ensure_ascii=False, sort_keys=True),
+        )
+
+        extra = {k: v for k, v in payload.items() if k not in ("event", "success", "message")}
+        _notification_bot.notify(
+            event=payload["event"],
+            success=payload["success"],
+            message=payload["message"],
+            extra=extra or None,
         )
 
         return jsonify(ok=True, event=payload["event"])

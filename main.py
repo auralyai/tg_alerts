@@ -57,7 +57,7 @@ ALLOWED_IPS = _parse_allowed_ips(_read_secret("ALLOWED_IPS"))
 _notification_bot = NotificationBot(
     token=_read_secret("TELEGRAM_BOT_TOKEN") or "",
     chat_id=int(_read_secret("TELEGRAM_CHAT_ID") or "0"),
-    bindings_file=os.getenv("BINDINGS_FILE", "bindings.json"),
+    bindings_file=os.getenv("BINDINGS_FILE", "data/bindings.json"),
 )
 _notification_bot.start()
 

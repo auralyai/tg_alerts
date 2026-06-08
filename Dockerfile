@@ -11,7 +11,7 @@ RUN addgroup -S app && adduser -S -G app app
 COPY pyproject.toml README.md ./
 RUN pip install --no-cache-dir .
 
-COPY --chown=app:app main.py ./
+COPY --chown=app:app main.py bot.py ./
 
 USER app
 

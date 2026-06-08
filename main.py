@@ -1,11 +1,9 @@
-import ipaddress
 import json
 import logging
 import os
 from typing import Any
 
-from flask import Flask, abort, jsonify, request
-from werkzeug.exceptions import HTTPException
+from flask import Flask, jsonify, request
 
 from bot import NotificationBot
 
@@ -16,29 +14,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("coolify_webhook")
-
-
-def _parse_allowed_ips(raw: str | None) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
-    if not raw:
-        return []
-    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
-    for item in raw.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        networks.append(ipaddress.ip_network(item))
-    return networks
-
-
-class ConnectionDrop(HTTPException):
-    code = 444
-    description = ""
-
-    def get_body(self, environ=None, scope=None):
-        return b""
-
-    def get_headers(self, environ=None, scope=None):
-        return []
 
 
 def _read_secret(name: str) -> str | None:
@@ -52,31 +27,12 @@ def _read_secret(name: str) -> str | None:
     return os.getenv(name)
 
 
-ALLOWED_IPS = _parse_allowed_ips(_read_secret("ALLOWED_IPS"))
-
 _notification_bot = NotificationBot(
     token=_read_secret("TELEGRAM_BOT_TOKEN") or "",
     chat_id=int(_read_secret("TELEGRAM_CHAT_ID") or "0"),
     bindings_file=os.getenv("BINDINGS_FILE", "data/bindings.json"),
 )
 _notification_bot.start()
-
-
-def _client_ip() -> str:
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.remote_addr or ""
-
-
-def _ip_allowed(ip_str: str) -> bool:
-    if not ALLOWED_IPS:
-        return True
-    try:
-        addr = ipaddress.ip_address(ip_str)
-    except ValueError:
-        return False
-    return any(addr in net for net in ALLOWED_IPS)
 
 
 def validate_payload(payload: Any) -> str | None:
@@ -99,20 +55,6 @@ def validate_payload(payload: Any) -> str | None:
 
 def create_app() -> Flask:
     app = Flask(__name__)
-
-    @app.errorhandler(ConnectionDrop)
-    def _drop(_error):
-        return "", 444
-
-    @app.before_request
-    def _check_ip():
-        if not request.path.startswith("/webhooks"):
-            return None
-        client_ip = _client_ip()
-        if not _ip_allowed(client_ip):
-            logger.warning("Rejected request from disallowed IP: %s", client_ip)
-            abort(ConnectionDrop())
-        return None
 
     @app.get("/health")
     def health():

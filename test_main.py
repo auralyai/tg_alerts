@@ -12,6 +12,7 @@ class CoolifyWebhookTestCase(unittest.TestCase):
     def test_accepts_test_event(self):
         response = self.client.post(
             "/webhooks/coolify",
+            headers={"X-Forwarded-For": "203.0.113.42"},
             json={
                 "success": True,
                 "event": "test",

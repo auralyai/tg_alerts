@@ -50,7 +50,9 @@ class NotificationBot:
         if self._bindings_file.exists():
             try:
                 data = json.loads(self._bindings_file.read_text())
-                self._chat_id = data.get("chat_id", self._chat_id)
+                saved_chat_id = data.get("chat_id")
+                if saved_chat_id:
+                    self._chat_id = saved_chat_id
                 self._topics = data.get("topics", {})
             except (json.JSONDecodeError, TypeError) as exc:
                 logger.warning("Failed to load bindings file: %s", exc)

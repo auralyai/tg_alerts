@@ -5,7 +5,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from telegram import Update
+from telegram import ReactionTypeEmoji, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -138,6 +138,7 @@ class NotificationBot:
         self._topics[category] = thread_id
         self._save_bindings()
         label = CATEGORIES.get(category, "All")
+        await update.message.set_reaction([ReactionTypeEmoji(emoji="\U0001f44d")])
         await update.message.reply_text(
             f"\u2705 Topic <code>{thread_id}</code> bound to <b>{label}</b>.",
             parse_mode=ParseMode.HTML,

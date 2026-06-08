@@ -11,6 +11,5 @@ dependencies = [
 
 [project.optional-dependencies]
 telegram = [
-    "pyrofork>=2.3.69",
-    "tgcrypto>=1.2.5",
+    "python-telegram-bot>=22.0",
 ]

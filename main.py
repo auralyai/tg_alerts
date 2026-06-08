@@ -7,7 +7,7 @@ from typing import Any
 from flask import Flask, abort, jsonify, request
 from werkzeug.exceptions import HTTPException
 
-from bot import NotificationBot, event_category
+from bot import NotificationBot
 
 
 logging.basicConfig(
@@ -56,6 +56,7 @@ ALLOWED_IPS = _parse_allowed_ips(_read_secret("ALLOWED_IPS"))
 
 _notification_bot = NotificationBot(
     token=_read_secret("TELEGRAM_BOT_TOKEN") or "",
+    chat_id=int(_read_secret("TELEGRAM_CHAT_ID") or "0"),
     bindings_file=os.getenv("BINDINGS_FILE", "bindings.json"),
 )
 _notification_bot.start()

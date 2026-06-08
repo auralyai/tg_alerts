@@ -1,7 +1,6 @@
 import asyncio
 import json
 import logging
-import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -37,10 +36,11 @@ def event_category(event: str) -> str:
 
 
 class NotificationBot:
-    def __init__(self, token: str, bindings_file: str = ""):
+    def __init__(self, token: str, chat_id: int, bindings_file: str = ""):
         self._token = token
+        self._chat_id = chat_id
         self._bindings_file = Path(bindings_file) if bindings_file else Path("bindings.json")
-        self._bindings: dict[str, set[int]] = {}
+        self._topics: dict[str, int] = {}
         self._application: Application | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -50,28 +50,27 @@ class NotificationBot:
         if self._bindings_file.exists():
             try:
                 data = json.loads(self._bindings_file.read_text())
-                self._bindings = {k: set(v) for k, v in data.items()}
+                self._chat_id = data.get("chat_id", self._chat_id)
+                self._topics = data.get("topics", {})
             except (json.JSONDecodeError, TypeError) as exc:
                 logger.warning("Failed to load bindings file: %s", exc)
-                self._bindings = {}
 
     def _save_bindings(self) -> None:
-        data = {k: sorted(v) for k, v in self._bindings.items() if v}
+        data = {"chat_id": self._chat_id, "topics": dict(sorted(self._topics.items()))}
         self._bindings_file.write_text(json.dumps(data, indent=2))
 
-    def _get_chats_for_event(self, event: str) -> set[int]:
+    def _thread_id_for_event(self, event: str) -> int | None:
         category = event_category(event)
-        chats: set[int] = set()
-        if category and category in self._bindings:
-            chats.update(self._bindings[category])
-        if "all" in self._bindings:
-            chats.update(self._bindings["all"])
-        return chats
+        if category and category in self._topics:
+            return self._topics[category]
+        if "all" in self._topics:
+            return self._topics["all"]
+        return None
 
     def notify(self, event: str, success: bool, message: str, extra: dict[str, Any] | None = None) -> None:
-        chats = self._get_chats_for_event(event)
-        if not chats:
+        if not self._chat_id:
             return
+        thread_id = self._thread_id_for_event(event)
         category = event_category(event)
         emoji = EMOJI_BY_CATEGORY.get(category, "\U0001f514")
         status_icon = "\u2705" if success else "\u274c"
@@ -86,37 +85,44 @@ class NotificationBot:
             if extra_lines:
                 body += "\n\n" + "\n".join(extra_lines)
 
-        logger.info("Notifying %d chat(s) for event=%s", len(chats), event)
-        for chat_id in chats:
-            if self._loop and self._application:
-                asyncio.run_coroutine_threadsafe(
-                    self._application.bot.send_message(
-                        chat_id=chat_id,
-                        text=body,
-                        parse_mode=ParseMode.HTML,
-                    ),
-                    self._loop,
-                )
+        logger.info("Notifying chat_id=%s thread_id=%s for event=%s", self._chat_id, thread_id, event)
+        if self._loop and self._application:
+            kwargs: dict[str, Any] = {
+                "chat_id": self._chat_id,
+                "text": body,
+                "parse_mode": ParseMode.HTML,
+            }
+            if thread_id is not None:
+                kwargs["message_thread_id"] = thread_id
+            asyncio.run_coroutine_threadsafe(
+                self._application.bot.send_message(**kwargs),
+                self._loop,
+            )
 
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not update.effective_chat:
-            return
-        chat_id = update.effective_chat.id
         await update.message.reply_text(
-            f"Chat ID: <code>{chat_id}</code>\n\n"
             "Commands:\n"
-            "/bind &lt;category&gt; \u2014 subscribe to category\n"
-            "/unbind &lt;category&gt; \u2014 unsubscribe\n"
-            "/status \u2014 show current subscriptions for this chat\n"
+            "/bind &lt;category&gt; \u2014 bind this topic to a category\n"
+            "/unbind &lt;category&gt; \u2014 unbind\n"
+            "/status \u2014 show topic bindings\n"
             "/categories \u2014 list available categories\n\n"
-            "Categories: " + ", ".join(CATEGORIES) + ", all",
+            "Categories: " + ", ".join(CATEGORIES) + ", all\n\n"
+            "Send these commands from the topic you want to bind.",
             parse_mode=ParseMode.HTML,
         )
 
     async def _cmd_bind(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not update.effective_chat or not context.args:
+        if not update.effective_message or not context.args:
             await update.message.reply_text("Usage: /bind &lt;category&gt;", parse_mode=ParseMode.HTML)
             return
+
+        thread_id = update.effective_message.message_thread_id
+        if not thread_id:
+            await update.message.reply_text(
+                "This command must be sent from a forum topic, not the main chat.",
+            )
+            return
+
         category = context.args[0].lower()
         if category == "*":
             category = "all"
@@ -128,46 +134,43 @@ class NotificationBot:
                 parse_mode=ParseMode.HTML,
             )
             return
-        chat_id = update.effective_chat.id
-        self._bindings.setdefault(category, set()).add(chat_id)
+
+        self._topics[category] = thread_id
         self._save_bindings()
         label = CATEGORIES.get(category, "All")
-        await update.message.reply_text(f"\u2705 Subscribed to <b>{label}</b>.", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(
+            f"\u2705 Topic <code>{thread_id}</code> bound to <b>{label}</b>.",
+            parse_mode=ParseMode.HTML,
+        )
 
     async def _cmd_unbind(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not update.effective_chat or not context.args:
+        if not context.args:
             await update.message.reply_text("Usage: /unbind &lt;category&gt;", parse_mode=ParseMode.HTML)
             return
+
         category = context.args[0].lower()
         if category == "*":
             category = "all"
-        chat_id = update.effective_chat.id
-        if category in self._bindings and chat_id in self._bindings[category]:
-            self._bindings[category].discard(chat_id)
-            if not self._bindings[category]:
-                del self._bindings[category]
+
+        if category in self._topics:
+            del self._topics[category]
             self._save_bindings()
             label = CATEGORIES.get(category, "All")
-            await update.message.reply_text(f"\u2705 Unsubscribed from <b>{label}</b>.", parse_mode=ParseMode.HTML)
+            await update.message.reply_text(f"\u2705 Unbound <b>{label}</b>.", parse_mode=ParseMode.HTML)
         else:
-            await update.message.reply_text("You are not subscribed to that category.")
+            await update.message.reply_text("No binding for that category.")
 
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not update.effective_chat:
+        if not self._topics:
+            await update.message.reply_text("No topic bindings configured.")
             return
-        chat_id = update.effective_chat.id
-        subs = []
-        for category in sorted(self._bindings):
-            if chat_id in self._bindings[category]:
-                label = CATEGORIES.get(category, "All")
-                subs.append(f"\u2022 {label}")
-        if subs:
-            await update.message.reply_text(
-                "Your subscriptions:\n" + "\n".join(subs),
-                parse_mode=ParseMode.HTML,
-            )
-        else:
-            await update.message.reply_text("No active subscriptions. Use /bind to subscribe.")
+        lines = [f"Chat: <code>{self._chat_id}</code>", ""]
+        for category in sorted(self._topics):
+            label = CATEGORIES.get(category, "All")
+            thread_id = self._topics[category]
+            emoji = EMOJI_BY_CATEGORY.get(category, "")
+            lines.append(f"{emoji} <b>{label}</b> \u2192 topic <code>{thread_id}</code>")
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
     async def _cmd_categories(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines = ["Available categories:"]
